@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Capture & Model Submission</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for focusing on the media elements */
+        #cameraFeed, #previewImage {
+            max-width: 100%;
+            height: auto;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+        }
+        /* Hidden canvas for processing */
+        #photoCanvas {
+            position: absolute;
+            left: -9999px;
+            top: -9999px;
+            visibility: hidden;
+        }
+        /* Custom border colors for output */
+        .border-orange-400 { border-color: #fb923c; }
+        .bg-orange-50 { background-color: #fff7ed; }
+        .text-orange-700 { color: #c2410c; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen p-4 sm:p-8 font-sans">
+    <div id="app" class="max-w-xl mx-auto bg-white p-6 sm:p-8 rounded-xl shadow-2xl space-y-6">
+        <h1 class="text-3xl font-bold text-gray-800 border-b pb-2">Photo Capture & Ripeness Analyzer</h1>
+
+        <!-- Image and Video Display Area -->
+        <div class="relative w-full aspect-video bg-gray-200 rounded-lg flex items-center justify-center overflow-hidden">
+            <img id="previewImage" src="#" alt="Image Preview" class="hidden" />
+            <video id="cameraFeed" playsinline autoplay class="hidden"></video>
+            <canvas id="photoCanvas"></canvas>
+            <div id="initialMessage" class="text-gray-500 text-center p-4">
+                <svg class="w-8 h-8 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.218A2 2 0 0110.742 4h2.516a2 2 0 011.664.89l.812 1.218A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                <p>Upload or capture an image to analyze its ripeness.</p>
+            </div>
+        </div>
+
+        <!-- Status/Feedback Area -->
+        <p id="statusText" class="text-sm text-gray-600 h-6">Awaiting action...</p>
+
+        <!-- Hidden File Input -->
+        <input type="file" id="imageUpload" accept="image/*" class="hidden">
+
+        <!-- Action Buttons -->
+        <div class="flex flex-col sm:flex-row gap-3 justify-between">
+            <button id="uploadBtn" class="flex-1 px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition duration-150 shadow-md">
+                Upload Image
+            </button>
+            <button id="takePictureBtn" class="flex-1 px-4 py-2 bg-yellow-500 text-white font-semibold rounded-lg hover:bg-yellow-600 transition duration-150 shadow-md">
+                Take Picture
+            </button>
+            <button id="submitBtn" disabled class="flex-1 px-4 py-2 bg-green-500 text-white font-semibold rounded-lg disabled:bg-green-300 hover:bg-green-600 transition duration-150 shadow-lg">
+                Analyze Ripeness
+            </button>
+        </div>
+        
+        <!-- Model Result Area -->
+        <h2 class="text-xl font-semibold mt-6 text-gray-700 pt-4 border-t border-dashed">Ripeness Analysis Result</h2>
+        <div id="modelOutput" class="p-4 bg-blue-50 border-l-4 border-blue-400 rounded-lg shadow-inner min-h-[5rem]">
+            <p class="text-gray-600" id="modelResultText">Awaiting submission...</p>
+        </div>
+    </div>
+
+    <script type="module">
+        console.log("Script is running!");
+        let currentImageFile = null;
+        let stream = null; // Global stream variable to manage camera access
+
+        // DOM elements
+        const previewImage = document.getElementById('previewImage');
+        const cameraFeed = document.getElementById('cameraFeed');
+        const photoCanvas = document.getElementById('photoCanvas');
+        const imageUpload = document.getElementById('imageUpload');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const takePictureBtn = document.getElementById('takePictureBtn');
+        const submitBtn = document.getElementById('submitBtn');
+        const statusText = document.getElementById('statusText');
+        const initialMessage = document.getElementById('initialMessage');
+        const modelOutput = document.getElementById('modelOutput');
+        const modelResultText = document.getElementById('modelResultText');
+
+        // --- Helper Function to map model output to friendly display ---
+
+        /**
+        * Returns friendly text, color classes, and an emoji based on the ripeness level.
+        * @param {string} level The ripeness classification string (e.g., 'ripe', 'rotten').
+        * @returns {{text: string, emoji: string, colorClass: string, bgClass: string}}
+        */
+        function getFriendlyOutput(level, confidence = 0) {
+            const normalizedLevel = level.toLowerCase();
+            let result = {};
+
+            switch (normalizedLevel) {
+                case 'ripe':
+                    result = {
+                        text: "Perfectly RIPE! This is the ideal time to enjoy it.\
+                        maximum micronutrients like potassium and vitamin B6",
+                        emoji: "✅",
+                        colorClass: "text-green-700",
+                        bgClass: "bg-green-50 border-green-400"
+                    };
+                    break;
+                case 'unripe':
+                    result = {
+                        text: "This item is UNRIPE. Store it in a warm place and wait a few days.\
+                        high in fiber, low in carbs, promotes blood sugar control",
+                        emoji: "⏳",
+                        colorClass: "text-yellow-700",
+                        bgClass: "bg-yellow-50 border-yellow-400"
+                    };
+                    break;
+                case 'overripe':
+                    result = {
+                        text: "It is OVERRIPE. It's likely soft, but great for cooking, baking, or smoothies.\
+                        natural sweetness, can replace fats in baking",
+                        emoji: "🟡",
+                        colorClass: "text-orange-700",
+                        bgClass: "bg-orange-50 border-orange-400"
+                    };
+                    break;
+                case 'rotten':
+                    result = {
+                        text: "Classification is ROTTEN. You can use a rotten banana for baking\
+                        , to make smoothies, or freeze it for later use in recipes",
+                        emoji: "❌",
+                        colorClass: "text-red-700",
+                        bgClass: "bg-red-50 border-red-400"
+                    };
+                    break;
+                default:
+                    result = {
+                        text: `Classification: ${level}. The status is unknown or unexpected.`,
+                        emoji: "❓",
+                        colorClass: "text-gray-700",
+                        bgClass: "bg-gray-100 border-gray-400"
+                    };
+            }
+
+            // Include confidence in the friendly text for RIPE and UNRIPE
+            
+
+            return result;
+        }
+
+        // --- Image Resizing and Compression Function (unchanged) ---
+
+        /**
+        * Resizes an image file to a max dimension and returns a Blob.
+        * @param {File} file The original image File object.
+        * @param {number} maxWidth The maximum width/height allowed.
+        * @returns {Promise<Blob>} A Promise that resolves with the compressed image Blob.
+        */
+        function resizeImage(file, maxWidth = 800) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const img = new Image();
+                    img.onload = function() {
+                        let width = img.width;
+                        let height = img.height;
+
+                        // Calculate new dimensions while maintaining aspect ratio
+                        if (width > maxWidth || height > maxWidth) {
+                            if (width > height) {
+                                height = Math.round(height * (maxWidth / width));
+                                width = maxWidth;
+                            } else {
+                                width = Math.round(width * (maxWidth / height));
+                                height = maxWidth;
+                            }
+                        }
+
+                        const canvas = document.createElement('canvas');
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+
+                        // Convert canvas to a compressed Blob (JPEG format, 0.7 quality)
+                        canvas.toBlob(resolve, 'image/jpeg', 0.7);
+                    };
+                    img.src = e.target.result;
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // --- Helper Function to reset display and UI (updated for cleaner class reset) ---
+
+        function resetDisplay() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            cameraFeed.classList.add('hidden');
+            previewImage.classList.add('hidden');
+            initialMessage.classList.remove('hidden');
+            takePictureBtn.textContent = 'Take Picture';
+            submitBtn.disabled = true;
+            currentImageFile = null;
+            statusText.textContent = 'Ready.';
+            modelResultText.textContent = 'Awaiting submission...';
+            // Reset output container to initial blue state
+            modelOutput.className = 'p-4 bg-blue-50 border-l-4 border-blue-400 rounded-lg shadow-inner min-h-[5rem]';
+        }
+
+        // --- Event Handlers (unchanged) ---
+
+        // 1. Upload Image Button
+        uploadBtn.addEventListener('click', () => {
+            resetDisplay();
+            imageUpload.click(); // Trigger the hidden file input
+        });
+
+        imageUpload.addEventListener('change', async function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                initialMessage.classList.add('hidden');
+                statusText.textContent = `Processing ${file.name}...`;
+                modelResultText.textContent = 'Image selected and resized.';
+
+                try {
+                    const resizedBlob = await resizeImage(file, 800);
+                    currentImageFile = new File([resizedBlob], file.name, { type: 'image/jpeg' });
+                    
+                    previewImage.src = URL.createObjectURL(currentImageFile);
+                    previewImage.classList.remove('hidden');
+                    
+                    statusText.textContent = `Image ready! Compressed size: ${(currentImageFile.size / 1024).toFixed(1)} KB`;
+                    submitBtn.disabled = false;
+                } catch (error) {
+                    statusText.textContent = 'Error processing image.';
+                    console.error('Resize Error:', error);
+                    resetDisplay();
+                }
+            }
+        });
+
+        // 2. Take Picture Button
+        takePictureBtn.addEventListener('click', async () => {
+            if (cameraFeed.classList.contains('hidden')) {
+                // START CAMERA FEED
+                previewImage.classList.add('hidden');
+                initialMessage.classList.add('hidden');
+                
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { facingMode: { exact: "environment" } } 
+                    });
+                    
+                    cameraFeed.srcObject = stream;
+                    cameraFeed.classList.remove('hidden');
+                    cameraFeed.play();
+                    
+                    statusText.textContent = 'Camera active. Click again to capture!';
+                    takePictureBtn.textContent = 'Snap Photo';
+                    submitBtn.disabled = true;
+
+                } catch (err) {
+                    statusText.textContent = 'Error: Camera access failed. (Denied or not found).';
+                    console.error("Camera access failed:", err);
+                    resetDisplay();
+                }
+            } else {
+                // CAPTURE PHOTO
+                if (!stream) return; // Guard clause
+
+                const context = photoCanvas.getContext('2d');
+                photoCanvas.width = cameraFeed.videoWidth;
+                photoCanvas.height = cameraFeed.videoHeight;
+                context.drawImage(cameraFeed, 0, 0, photoCanvas.width, photoCanvas.height);
+                
+                // Stop the video stream
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+                cameraFeed.classList.add('hidden');
+                takePictureBtn.textContent = 'Take Picture';
+
+                photoCanvas.toBlob(async (blob) => {
+                    const capturedFile = new File([blob], 'captured_photo.jpg', { type: 'image/jpeg' });
+                    statusText.textContent = `Processing captured photo...`;
+                    
+                    try {
+                        const resizedBlob = await resizeImage(capturedFile, 800);
+                        currentImageFile = new File([resizedBlob], 'resized_capture.jpg', { type: 'image/jpeg' });
+                        
+                        previewImage.src = URL.createObjectURL(currentImageFile);
+                        previewImage.classList.remove('hidden');
+
+                        statusText.textContent = `Captured and resized! Compressed size: ${(currentImageFile.size / 1024).toFixed(1)} KB`;
+                        modelResultText.textContent = 'Image captured and resized.';
+                        submitBtn.disabled = false;
+                    } catch (error) {
+                        statusText.textContent = 'Error processing captured image.';
+                        console.error('Resize Error:', error);
+                        resetDisplay();
+                    }
+                }, 'image/jpeg', 0.9);
+            }
+        });
+
+        // 3. Submit Button
+        submitBtn.addEventListener('click', () => {
+            if (currentImageFile) {
+                submitImageForModelProcessing(currentImageFile);
+            } else {
+                statusText.textContent = 'Please select or capture an image first.';
+            }
+        });
+
+        /**
+        * Sends the image to a FastAPI endpoint for model processing and displays the result.
+        * * IMPORTANT: Change the 'fastapiEndpoint' variable to your actual server address!
+        */
+        async function submitImageForModelProcessing(imageFile) {
+            statusText.textContent = `Uploading ${imageFile.name} (${(imageFile.size / 1024).toFixed(1)} KB) to server...`;
+            modelResultText.textContent = 'Preparing upload...';
+            submitBtn.disabled = true;
+
+            // Set output container to processing blue state
+            modelOutput.className = 'p-4 bg-blue-50 border-l-4 border-blue-400 rounded-lg shadow-inner min-h-[5rem]';
+
+            const formData = new FormData();
+            // The field name 'file' must match what your FastAPI endpoint expects
+            formData.append('file', imageFile, imageFile.name); 
+
+            // --- >>> IMPORTANT: REPLACE THIS URL WITH YOUR ACTUAL FASTAPI ENDPOINT <<< ---
+            const fastapiEndpoint = '/api/process-image'; 
+            
+            try {
+                const response = await fetch(fastapiEndpoint, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                // Check if the response was successful (HTTP status 200-299)
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP error! Status: ${response.status}. Message: ${errorText.substring(0, 100)}...`);
+                }
+
+                // Parse the JSON response from the FastAPI model
+                const result = await response.json();
+                console.log(result)
+                // --- Display Friendly Output Logic ---
+                // We expect the model to return a JSON object with at least a 'ripeness_level' field
+                const ripeness = result.ripeness_level; 
+                console.log(ripeness)
+                const confidence = result.confidence || 0;
+                
+                if (ripeness) {
+                    const friendly = getFriendlyOutput(ripeness, confidence);
+                    
+                    statusText.textContent = `Analysis successful. Ripeness: ${ripeness}.`;
+                    modelResultText.innerHTML = `
+                        <p class="text-3xl font-extrabold ${friendly.colorClass}">${friendly.emoji} ${ripeness.toUpperCase()}</p>
+                        <p class="mt-2 text-base text-gray-800">${friendly.text}</p>
+                        
+                    `;
+                    // Update modelOutput classes for color-coding
+                    modelOutput.className = `p-4 border-l-4 rounded-lg shadow-inner min-h-[5rem] ${friendly.bgClass}`;
+                } else {
+                    // Fallback for successful API call but unexpected JSON structure
+                    statusText.textContent = 'Analysis successful, but result format is unknown.';
+                    modelResultText.innerHTML = `
+                        <p class="font-bold text-gray-700">Raw Model Output Received:</p>
+                        <pre class="whitespace-pre-wrap text-xs bg-gray-100 p-2 rounded">${JSON.stringify(result, null, 2)}</pre>
+                    `;
+                    modelOutput.className = 'p-4 bg-gray-100 border-l-4 border-gray-400 rounded-lg shadow-inner min-h-[5rem]';
+                }
+                
+            } catch (error) {
+                // Handle network errors, CORS issues, or non-2xx HTTP responses
+                statusText.textContent = 'Submission failed! Check the console for error details.';
+                modelResultText.innerHTML = `<p class="font-bold text-red-700">Error</p><p>${error.message}</p>`;
+                
+                // Set output container to error red state
+                modelOutput.className = 'p-4 bg-red-50 border-l-4 border-red-400 rounded-lg shadow-inner min-h-[5rem]';
+                console.error('Submission Error:', error);
+            } finally {
+                submitBtn.disabled = false;
+            }
+        }
+
+        // Auto-start setup when the script loads
+        resetDisplay();
+
+    </script>
+</body>
+</html>
