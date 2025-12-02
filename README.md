@@ -43,13 +43,12 @@ I plan to place this on my site so anyone can try it with Docker.
 
 🛠️ Tech Used
 
-TensorFlow
-ImageNet V2
-FastAPI
-JavaScript
-Python
+TensorFlow/
+ImageNet V2/
+FastAPI/
+JavaScript/
+Python/
 Docker
-Docker Compose
 
 🔗 Links
 
